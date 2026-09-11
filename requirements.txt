@@ -1,4 +1,6 @@
 python-telegram-bot==13.15
+standard-imghdr
 urllib3==1.26.18
-six==1.16.0
 APScheduler==3.6.3
+Flask
+requests
