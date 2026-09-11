@@ -1,9 +1,46 @@
+import os
 import logging
+from datetime import datetime, timedelta
+import requests
+from dotenv import load_dotenv
+from flask import Flask, Response, abort
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
-# --- НАСТРОЙКИ ---
-BOT_TOKEN = "8881616068:AAEQJCDcWMT658KbX-1RIWqWz7gg4GXJhs8"  # ВСТАВЬ СЮДА ТОКЕН ОТ @BotFather
+# --- ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
+load_dotenv()
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не найден в .env файле!")
+
+# Публичный адрес сервиса на FPS.ms (получишь после первого запуска)
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://your-app.fps.ms")
+BASE_URL = "https://www.zelmex.ru/images/stories/"
+
+# --- FLASK: САЙТ-ПРОКСИ ДЛЯ PDF ---
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "ZMK Bot is running"
+
+@app.route("/pdf/<ddmm>")
+def serve_pdf(ddmm):
+    """Скачивает PDF с zelmex.ru и отдаёт его браузеру."""
+    url = BASE_URL + ddmm + ".pdf"
+    try:
+        headers = {"Referer": "https://www.zelmex.ru/index.php/raspisanie"}
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            return Response(
+                r.content,
+                mimetype="application/pdf",
+                headers={"Content-Disposition": f"inline; filename=raspisanie_{ddmm}.pdf"}
+            )
+    except Exception as e:
+        logging.error(f"Ошибка скачивания PDF {url}: {e}")
+    abort(404)
 
 # --- БАЗА ПРЕПОДАВАТЕЛЕЙ ЗМК ---
 TEACHERS = {
@@ -43,6 +80,12 @@ TEACHERS = {
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# --- ФУНКЦИИ БОТА ---
+
+def get_pdf_url(date):
+    ddmm = date.strftime("%d%m")
+    return f"{PUBLIC_URL}/pdf/{ddmm}"
+
 def start(update, context):
     keyboard = [
         [InlineKeyboardButton("📅 Расписание", callback_data="menu_schedule")],
@@ -57,10 +100,17 @@ def button_handler(update, context):
 
     if data == "menu_schedule":
         keyboard = [
-            [InlineKeyboardButton("Сегодня", callback_data="sched_today"), InlineKeyboardButton("Завтра", callback_data="sched_tomorrow")],
+            [InlineKeyboardButton("Сегодня", callback_data="sched_today"),
+             InlineKeyboardButton("Завтра", callback_data="sched_tomorrow")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="menu_main")],
         ]
         query.edit_message_text("Выбери день:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "sched_today":
+        show_schedule(query, datetime.now())
+
+    elif data == "sched_tomorrow":
+        show_schedule(query, datetime.now() + timedelta(days=1))
 
     elif data == "menu_teachers":
         keys = list(TEACHERS.keys())
@@ -81,21 +131,26 @@ def button_handler(update, context):
             keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="menu_teachers")]]
             query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data == "sched_today":
-        query.edit_message_text("Парсинг расписания на сегодня...")
-
-    elif data == "sched_tomorrow":
-        query.edit_message_text("Парсинг расписания на завтра...")
-
     elif data == "menu_main":
         start(update, context)
+
+def show_schedule(query, date):
+    url = get_pdf_url(date)
+    text = (
+        f"📅 Расписание на {date.strftime('%d.%m.%Y')}:\n\n"
+        f"🔗 [Открыть PDF]({url})\n\n"
+        f"_Если ссылка не открывается — значит, на эту дату файла нет._"
+    )
+    query.edit_message_text(text, parse_mode="Markdown", disable_web_page_preview=False)
+
+# --- ЗАПУСК ---
 
 def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CallbackQueryHandler(button_handler))
-    print("Бот запущен. Нажми Ctrl+C для остановки.")
+    print("Бот запущен.")
     updater.start_polling()
     updater.idle()
 
